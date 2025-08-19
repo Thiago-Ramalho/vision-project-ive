@@ -58,6 +58,21 @@ This will:
 - Generate a rectified (perspective-corrected) image
 - Save the result
 
+### 3. Testing Calibration Quality
+
+To verify your calibration data is working correctly:
+
+```bash
+python test_calibration.py
+```
+
+This comprehensive testing tool will:
+- Validate calibration file integrity
+- Show before/after distortion correction comparison
+- Analyze distortion patterns and quality metrics
+- Provide real-time correction preview
+- Give quality assessment and recommendations
+
 ## Project Structure
 
 ```
@@ -67,13 +82,29 @@ src/
 ├── camera_capture.py    # Camera handling and image capture
 ├── image_processor.py   # Image processing and rectification
 └── utils.py            # Utility functions
+
+detect_cameras.py        # Camera detection and testing utility
+test_calibration.py      # Calibration quality testing tool
 ```
 
 ## How to Use
 
-1. **Calibration Phase**: Run the calibration script and capture 10-15 images of a chessboard pattern from different angles and distances.
+1. **Camera Detection**: First, identify available cameras:
+   ```bash
+   python detect_cameras.py
+   ```
 
-2. **Rectification Phase**: 
+2. **Calibration Phase**: Run the calibration script and capture 10-15 images of a chessboard pattern from different angles and distances:
+   ```bash
+   python src/calibration.py
+   ```
+
+3. **Test Calibration**: Verify your calibration quality:
+   ```bash
+   python test_calibration.py
+   ```
+
+4. **Rectification Phase**: 
    - Run the main application
    - Position your camera to capture the document/surface you want to rectify
    - Press 'c' to capture an image
@@ -100,3 +131,9 @@ src/
 - Use a printed chessboard pattern (9x6 or 8x6 internal corners work well)
 - For best rectification results, ensure the four selected points form a quadrilateral
 - The application assumes the target rectangle should be oriented upright in the final image
+- Run `test_calibration.py` to verify calibration quality before using for rectification
+- Calibration quality indicators:
+  - **Excellent**: < 0.5 pixels reprojection error
+  - **Good**: 0.5 - 1.0 pixels reprojection error  
+  - **Acceptable**: 1.0 - 2.0 pixels reprojection error
+  - **Poor**: > 2.0 pixels reprojection error (recalibrate recommended)

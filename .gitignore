@@ -131,6 +131,7 @@ dmypy.json
 # Project specific
 calibration_data.npz
 calibration_data.xml
+calibration_data_summary.txt
 captured_images/
 *.jpg
 *.png
@@ -139,5 +140,6 @@ captured_images/
 *.tiff
 rectified_image.*
 distorted_image.*
-test_calibration.*
+distortion_visualization.*
+calibration_test_*.jpg
 
