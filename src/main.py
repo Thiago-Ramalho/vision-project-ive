@@ -89,12 +89,12 @@ class RectificationApp:
             print(f"  Point {i+1}: {point}")
         
         # Use input video resolution as default output resolution
-        output_width = self.frame_width
-        output_height = self.frame_height
+        # But the rectifier will calculate optimal size respecting field proportions
+        field_aspect_ratio = 170.0 / 130.0  # Mini soccer field: 170cm x 130cm
         
         # Compute transformation
         try:
-            self.rectifier.compute_transformation(points, output_width, output_height)
+            self.rectifier.compute_transformation(points, field_aspect_ratio=field_aspect_ratio)
             
             # Save transformation to XML
             transform_file = "rectification_transform.xml"
@@ -158,8 +158,16 @@ class RectificationApp:
         status_text = f"Mode: {'Rectified' if show_rectified else 'Normal'}"
         if not has_rectification:
             status_text += " - No rectification configured"
+        else:
+            status_text += " - Soccer field (170×130cm)"
         
         cv2.putText(frame, status_text, (margin, status_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        
+        # Field info when in rectified mode
+        if show_rectified and has_rectification:
+            field_info_y = status_y - 25
+            field_info = f"Real-world proportions maintained | Aspect ratio: {170.0/130.0:.3f}"
+            cv2.putText(frame, field_info, (margin, field_info_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
         
         # Instructions
         instructions = [

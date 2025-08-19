@@ -27,7 +27,7 @@ class RealtimeRectifier:
         self.output_height = None
         self.is_initialized = False
         
-    def compute_transformation(self, src_points, output_width=None, output_height=None):
+    def compute_transformation(self, src_points, output_width=None, output_height=None, field_aspect_ratio=None):
         """
         Compute transformation matrix and maps from source points.
         
@@ -35,6 +35,7 @@ class RealtimeRectifier:
             src_points: List of 4 corner points [(x1,y1), (x2,y2), (x3,y3), (x4,y4)]
             output_width: Width of output rectified image (default: auto-calculate)
             output_height: Height of output rectified image (default: auto-calculate)
+            field_aspect_ratio: Real-world aspect ratio (width/height) of the field (default: 170/130)
         """
         if len(src_points) != 4:
             raise ValueError("Need exactly 4 points for rectification")
@@ -42,30 +43,34 @@ class RealtimeRectifier:
         # Convert to numpy array
         src_pts = np.array(src_points, dtype=np.float32)
         
-        # Calculate output dimensions if not provided
+        # Default to soccer field proportions: 170cm x 130cm
+        if field_aspect_ratio is None:
+            field_aspect_ratio = 170.0 / 130.0  # ≈ 1.308
+        
+        # Calculate output dimensions respecting field proportions and input frame size
         if output_width is None or output_height is None:
-            # Calculate based on the distance between points
-            # Use the maximum width and height from the quadrilateral
+            # Calculate the largest rectangle with correct aspect ratio that fits in input frame
+            input_aspect_ratio = self.frame_width / self.frame_height
             
-            # Top edge length
-            top_width = np.linalg.norm(src_pts[1] - src_pts[0])
-            # Bottom edge length
-            bottom_width = np.linalg.norm(src_pts[2] - src_pts[3])
-            # Left edge length
-            left_height = np.linalg.norm(src_pts[3] - src_pts[0])
-            # Right edge length
-            right_height = np.linalg.norm(src_pts[2] - src_pts[1])
-            
-            self.output_width = int(max(top_width, bottom_width))
-            self.output_height = int(max(left_height, right_height))
+            if field_aspect_ratio > input_aspect_ratio:
+                # Field is wider than input frame - constrain by width
+                self.output_width = self.frame_width
+                self.output_height = int(self.frame_width / field_aspect_ratio)
+            else:
+                # Field is taller than input frame - constrain by height
+                self.output_height = self.frame_height
+                self.output_width = int(self.frame_height * field_aspect_ratio)
         else:
             self.output_width = output_width
             self.output_height = output_height
         
-        # Define destination points (rectangle corners)
+        print(f"Output dimensions: {self.output_width}x{self.output_height} (aspect ratio: {self.output_width/self.output_height:.3f})")
+        print(f"Field aspect ratio: {field_aspect_ratio:.3f} (170cm x 130cm)")
+        
+        # Define destination points for a perfect rectangle
         dst_pts = np.array([
             [0, 0],                                    # Top-left
-            [self.output_width - 1, 0],               # Top-right
+            [self.output_width - 1, 0],                # Top-right
             [self.output_width - 1, self.output_height - 1],  # Bottom-right
             [0, self.output_height - 1]               # Bottom-left
         ], dtype=np.float32)
@@ -104,13 +109,13 @@ class RealtimeRectifier:
     
     def rectify_frame(self, frame):
         """
-        Apply real-time rectification to a frame.
+        Apply real-time rectification to a frame with proper centering and black borders.
         
         Args:
             frame: Input frame (numpy array)
             
         Returns:
-            numpy array: Rectified frame
+            numpy array: Rectified frame with same dimensions as input, centered with black borders
         """
         if not self.is_initialized:
             raise RuntimeError("Rectifier not initialized. Call compute_transformation first.")
@@ -119,7 +124,22 @@ class RealtimeRectifier:
         rectified = cv2.remap(frame, self.map_x, self.map_y, 
                              cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
         
-        return rectified
+        # If rectified image is smaller than input frame, center it with black borders
+        if self.output_width != self.frame_width or self.output_height != self.frame_height:
+            # Create black frame with input dimensions
+            output_frame = np.zeros((self.frame_height, self.frame_width, frame.shape[2]), dtype=frame.dtype)
+            
+            # Calculate centering offsets
+            offset_x = (self.frame_width - self.output_width) // 2
+            offset_y = (self.frame_height - self.output_height) // 2
+            
+            # Place rectified image in center
+            output_frame[offset_y:offset_y + self.output_height, 
+                        offset_x:offset_x + self.output_width] = rectified
+            
+            return output_frame
+        else:
+            return rectified
     
     def save_transformation_xml(self, filename="rectification_transform.xml"):
         """
@@ -141,6 +161,8 @@ class RealtimeRectifier:
         ET.SubElement(metadata, "input_height").text = str(self.frame_height)
         ET.SubElement(metadata, "output_width").text = str(self.output_width)
         ET.SubElement(metadata, "output_height").text = str(self.output_height)
+        ET.SubElement(metadata, "field_aspect_ratio").text = f"{170.0/130.0:.6f}"
+        ET.SubElement(metadata, "field_description").text = "Mini soccer field: 170cm x 130cm"
         
         # Add homography matrix
         homography_elem = ET.SubElement(root, "HomographyMatrix")
