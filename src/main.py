@@ -10,7 +10,9 @@ from camera_capture import CameraCapture, select_camera_interactive, preview_cam
 from point_selector import RealtimePointSelector
 from realtime_rectifier import RealtimeRectifier
 from utils import load_calibration_data
+import easyocr
 
+reader = easyocr.Reader(['en'],gpu=False)
 
 class RectificationApp:
     def __init__(self, camera_index=None):
@@ -194,7 +196,7 @@ class RectificationApp:
         x, y = point
         rx, ry, rw, rh = rect
         return rx <= x <= rx + rw and ry <= y <= ry + rh
-    
+
     def run_unified_interface(self):
         """Run the unified interface with normal/rectified view switching."""
         print("\n=== Unified Camera Interface ===")
@@ -214,6 +216,7 @@ class RectificationApp:
         cv2.namedWindow(window_name, cv2.WINDOW_AUTOSIZE)
         
         frame_count = 0
+        frames_for_recal = 500
         try:
             while True:
                 # Get frame
@@ -221,6 +224,23 @@ class RectificationApp:
                 if frame is None:
                     print("Failed to get frame from camera")
                     break
+                
+                if(frame_count % frames_for_recal == 0):
+                    frame_gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+                    pts = []
+                    st = { '1','2','3','4' }
+                    reads = reader.readtext(frame_gray)
+                    for read in reads:
+                        if read[1] in st:
+                            x1 = [int(x) for x in read[0][0]]
+                            x2 = [int(x) for x in read[0][2]]
+                            pts.append([(x1[0] + x2[0])/2, (x1[1] + x2[1])/2])
+                            cv2.rectangle(frame, [int(x) for x in read[0][0]], [int(x) for x in read[0][2]], 0, 5)
+                            st.remove(read[1])
+                    print("VAPO",pts,st)
+                    if(len(pts) == 4):
+                        print("VAPO")
+                        self.rectifier.compute_transformation(pts)
                 
                 # Apply distortion correction
                 corrected_frame = cv2.undistort(frame, self.camera_matrix, self.distortion_coeffs)
