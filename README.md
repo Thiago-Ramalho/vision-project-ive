@@ -41,7 +41,7 @@ This will:
 - Capture multiple images using your camera
 - Detect chessboard patterns for calibration
 - Calculate camera matrix and distortion coefficients
-- Save calibration data to `calibration_data.npz`
+- Save calibration data to `calibration_data.xml` (cross-platform format)
 
 ### 2. Image Rectification
 
@@ -89,7 +89,8 @@ src/
 
 ## Output Files
 
-- `calibration_data.npz`: Camera calibration parameters
+- `calibration_data.xml`: Camera calibration parameters (OpenCV XML format - cross-platform)
+- `calibration_data_summary.txt`: Human-readable calibration summary
 - `rectified_image.jpg`: Final rectified image
 - `captured_images/`: Directory containing captured calibration images
 

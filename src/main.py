@@ -6,14 +6,23 @@ This module provides the main entry point for the application.
 import cv2
 import numpy as np
 import os
-from camera_capture import CameraCapture
+from camera_capture import CameraCapture, select_camera_interactive, preview_camera
 from image_processor import ImageProcessor
 from utils import load_calibration_data, save_image
 
 
 class RectificationApp:
-    def __init__(self):
-        self.camera = CameraCapture()
+    def __init__(self, camera_index=None):
+        # Select camera
+        if camera_index is None:
+            camera_index = select_camera_interactive()
+        
+        # Ask if user wants to preview the camera
+        preview_choice = input(f"\nDo you want to preview camera {camera_index} before starting? (y/N): ").strip().lower()
+        if preview_choice in ['y', 'yes']:
+            preview_camera(camera_index)
+        
+        self.camera = CameraCapture(camera_index)
         self.processor = ImageProcessor()
         self.points = []
         self.captured_image = None
@@ -22,7 +31,14 @@ class RectificationApp:
     def load_calibration(self):
         """Load camera calibration data."""
         try:
-            self.calibration_data = load_calibration_data()
+            # Try to load XML format first (preferred), then fallback to NPZ
+            if os.path.exists('calibration_data.xml'):
+                self.calibration_data = load_calibration_data('calibration_data.xml')
+            elif os.path.exists('calibration_data.npz'):
+                self.calibration_data = load_calibration_data('calibration_data.npz')
+            else:
+                self.calibration_data = None
+            
             if self.calibration_data is None:
                 print("No calibration data found. Please run calibration.py first.")
                 return False

@@ -6,17 +6,18 @@ This module helps remove radial distortion from camera images.
 import cv2
 import numpy as np
 import os
-from camera_capture import CameraCapture
+from camera_capture import CameraCapture, select_camera_interactive, preview_camera
 from utils import save_calibration_data
 
 
 class CameraCalibrator:
-    def __init__(self, chessboard_size=(9, 6)):
+    def __init__(self, chessboard_size=(9, 6), camera_index=None):
         """
         Initialize the calibrator.
         
         Args:
             chessboard_size: Tuple of (width, height) of internal chessboard corners
+            camera_index: Index of camera to use (None for interactive selection)
         """
         self.chessboard_size = chessboard_size
         self.criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
@@ -29,7 +30,16 @@ class CameraCalibrator:
         self.objpoints = []  # 3d points in real world space
         self.imgpoints = []  # 2d points in image plane
         
-        self.camera = CameraCapture()
+        # Select camera
+        if camera_index is None:
+            camera_index = select_camera_interactive()
+        
+        # Ask if user wants to preview the camera
+        preview_choice = input(f"\nDo you want to preview camera {camera_index} before calibration? (y/N): ").strip().lower()
+        if preview_choice in ['y', 'yes']:
+            preview_camera(camera_index)
+        
+        self.camera = CameraCapture(camera_index)
         self.calibration_images = []
         
     def capture_calibration_images(self, min_images=10):
@@ -182,9 +192,12 @@ class CameraCalibrator:
             calibration_data = self.calibrate_camera()
             
             if calibration_data is not None:
-                # Save calibration data
-                save_calibration_data(calibration_data)
-                print("Calibration data saved successfully!")
+                # Save calibration data in XML format (cross-platform compatible)
+                save_calibration_data(calibration_data, 'calibration_data.xml', 'xml')
+                print("Calibration data saved successfully in XML format!")
+                
+                # Also save in NPZ format for backward compatibility (optional)
+                # save_calibration_data(calibration_data, 'calibration_data.npz', 'npz')
                 
                 # Demonstrate distortion correction
                 self.demonstrate_correction(calibration_data)
