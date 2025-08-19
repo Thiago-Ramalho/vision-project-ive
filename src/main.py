@@ -30,6 +30,7 @@ class RectificationApp:
         self.camera_matrix = None
         self.distortion_coeffs = None
         self.rectifier = None
+        self.mouse_action = None  # For handling mouse clicks
         
         # Get frame dimensions
         test_frame = self.camera.get_frame()
@@ -87,16 +88,9 @@ class RectificationApp:
         for i, point in enumerate(points):
             print(f"  Point {i+1}: {point}")
         
-        # Ask for output dimensions
-        print("\nOutput dimensions for rectified image:")
-        try:
-            width = input(f"Width (default: auto-calculate): ").strip()
-            height = input(f"Height (default: auto-calculate): ").strip()
-            
-            output_width = int(width) if width else None
-            output_height = int(height) if height else None
-        except ValueError:
-            output_width = output_height = None
+        # Use input video resolution as default output resolution
+        output_width = self.frame_width
+        output_height = self.frame_height
         
         # Compute transformation
         try:
@@ -122,19 +116,102 @@ class RectificationApp:
                 return True
         return False
     
-    def run_realtime_rectification(self):
-        """Run the real-time rectification loop."""
-        if not self.rectifier or not self.rectifier.is_initialized:
-            print("Rectifier not initialized")
-            return
+    def draw_control_buttons(self, frame, show_rectified, has_rectification):
+        """Draw control buttons on the frame."""
+        height, width = frame.shape[:2]
+        button_width = 120
+        button_height = 40
+        margin = 10
         
-        print("\n=== Real-time Rectification Started ===")
-        print("Press 'q' to quit, 's' to save current rectified frame")
-        print("Press 'r' to reconfigure rectification points")
+        # Button positions (bottom of frame)
+        y_base = height - button_height - margin
         
-        # Create windows
-        cv2.namedWindow('Original (Distortion Corrected)', cv2.WINDOW_AUTOSIZE)
-        cv2.namedWindow('Rectified (Real-time)', cv2.WINDOW_AUTOSIZE)
+        # Switch view button
+        switch_x = margin
+        switch_color = (0, 150, 0) if has_rectification else (100, 100, 100)
+        switch_text = "Normal View" if show_rectified else "Rectified View"
+        
+        cv2.rectangle(frame, (switch_x, y_base), (switch_x + button_width, y_base + button_height), switch_color, -1)
+        cv2.rectangle(frame, (switch_x, y_base), (switch_x + button_width, y_base + button_height), (255, 255, 255), 2)
+        
+        # Center text
+        text_size = cv2.getTextSize(switch_text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0]
+        text_x = switch_x + (button_width - text_size[0]) // 2
+        text_y = y_base + (button_height + text_size[1]) // 2
+        cv2.putText(frame, switch_text, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+        
+        # Configure points button
+        config_x = switch_x + button_width + margin
+        config_color = (150, 100, 0)
+        config_text = "Configure Points"
+        
+        cv2.rectangle(frame, (config_x, y_base), (config_x + button_width, y_base + button_height), config_color, -1)
+        cv2.rectangle(frame, (config_x, y_base), (config_x + button_width, y_base + button_height), (255, 255, 255), 2)
+        
+        text_size = cv2.getTextSize(config_text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0]
+        text_x = config_x + (button_width - text_size[0]) // 2
+        text_y = y_base + (button_height + text_size[1]) // 2
+        cv2.putText(frame, config_text, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+        
+        # Status text
+        status_y = y_base - 10
+        status_text = f"Mode: {'Rectified' if show_rectified else 'Normal'}"
+        if not has_rectification:
+            status_text += " - No rectification configured"
+        
+        cv2.putText(frame, status_text, (margin, status_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        
+        # Instructions
+        instructions = [
+            "Press 'v' to toggle view, 'c' to configure points, 'q' to quit"
+        ]
+        
+        for i, instruction in enumerate(instructions):
+            y_pos = 30 + i * 25
+            cv2.putText(frame, instruction, (margin, y_pos), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        
+        return {
+            'switch': (switch_x, y_base, button_width, button_height),
+            'config': (config_x, y_base, button_width, button_height)
+        }
+    
+    def handle_mouse_click(self, event, x, y, flags, param):
+        """Handle mouse clicks on control buttons."""
+        if event == cv2.EVENT_LBUTTONDOWN:
+            buttons, show_rectified, has_rectification = param
+            
+            # Check switch view button
+            if self.point_in_rect((x, y), buttons['switch']) and has_rectification:
+                # We need to use a class variable to communicate with main loop
+                self.mouse_action = 'switch'
+            
+            # Check configure points button
+            elif self.point_in_rect((x, y), buttons['config']):
+                self.mouse_action = 'config'
+    
+    def point_in_rect(self, point, rect):
+        """Check if point is inside rectangle."""
+        x, y = point
+        rx, ry, rw, rh = rect
+        return rx <= x <= rx + rw and ry <= y <= ry + rh
+    
+    def run_unified_interface(self):
+        """Run the unified interface with normal/rectified view switching."""
+        print("\n=== Unified Camera Interface ===")
+        print("Controls:")
+        print("- Press 'v' or click button to toggle between normal/rectified view")
+        print("- Press 'c' or click button to configure rectification points")
+        print("- Press 'q' to quit")
+        print("- Press 's' to save current frame")
+        
+        # Interface state
+        show_rectified = False
+        has_rectification = self.rectifier and self.rectifier.is_initialized
+        mouse_action = None
+        
+        # Create window
+        window_name = "Camera Interface"
+        cv2.namedWindow(window_name, cv2.WINDOW_AUTOSIZE)
         
         frame_count = 0
         try:
@@ -148,31 +225,59 @@ class RectificationApp:
                 # Apply distortion correction
                 corrected_frame = cv2.undistort(frame, self.camera_matrix, self.distortion_coeffs)
                 
-                # Apply real-time rectification
-                rectified_frame = self.rectifier.rectify_frame(corrected_frame)
+                # Apply rectification if needed and available
+                if show_rectified and has_rectification:
+                    display_frame = self.rectifier.rectify_frame(corrected_frame)
+                else:
+                    display_frame = corrected_frame.copy()
                 
-                # Display both frames
-                cv2.imshow('Original (Distortion Corrected)', corrected_frame)
-                cv2.imshow('Rectified (Real-time)', rectified_frame)
+                # Draw control buttons
+                buttons = self.draw_control_buttons(display_frame, show_rectified, has_rectification)
+                
+                # Set mouse callback with current state
+                cv2.setMouseCallback(window_name, self.handle_mouse_click, (buttons, show_rectified, has_rectification))
+                
+                # Display frame
+                cv2.imshow(window_name, display_frame)
+                
+                # Handle mouse actions
+                if self.mouse_action == 'switch' and has_rectification:
+                    show_rectified = not show_rectified
+                    print(f"Switched to {'rectified' if show_rectified else 'normal'} view")
+                    self.mouse_action = None
+                elif self.mouse_action == 'config':
+                    cv2.destroyWindow(window_name)
+                    if self.setup_rectification():
+                        has_rectification = True
+                        print("Rectification configured successfully")
+                    else:
+                        print("Rectification configuration failed")
+                    cv2.namedWindow(window_name, cv2.WINDOW_AUTOSIZE)
+                    self.mouse_action = None
                 
                 # Handle keyboard input
                 key = cv2.waitKey(1) & 0xFF
                 if key == ord('q'):
                     break
-                elif key == ord('s'):
-                    # Save current rectified frame
-                    filename = f"rectified_realtime_{frame_count:04d}.jpg"
-                    cv2.imwrite(filename, rectified_frame)
-                    print(f"Saved frame: {filename}")
-                elif key == ord('r'):
-                    # Reconfigure rectification
-                    cv2.destroyWindow('Original (Distortion Corrected)')
-                    cv2.destroyWindow('Rectified (Real-time)')
+                elif key == ord('v') and has_rectification:
+                    # Toggle view
+                    show_rectified = not show_rectified
+                    print(f"Switched to {'rectified' if show_rectified else 'normal'} view")
+                elif key == ord('c'):
+                    # Configure points
+                    cv2.destroyWindow(window_name)
                     if self.setup_rectification():
-                        cv2.namedWindow('Original (Distortion Corrected)', cv2.WINDOW_AUTOSIZE)
-                        cv2.namedWindow('Rectified (Real-time)', cv2.WINDOW_AUTOSIZE)
+                        has_rectification = True
+                        print("Rectification configured successfully")
                     else:
-                        break
+                        print("Rectification configuration failed")
+                    cv2.namedWindow(window_name, cv2.WINDOW_AUTOSIZE)
+                elif key == ord('s'):
+                    # Save current frame
+                    prefix = "rectified" if (show_rectified and has_rectification) else "normal"
+                    filename = f"{prefix}_frame_{frame_count:04d}.jpg"
+                    cv2.imwrite(filename, display_frame)
+                    print(f"Saved frame: {filename}")
                 
                 frame_count += 1
         
@@ -192,20 +297,19 @@ class RectificationApp:
             return
         
         # Check for existing transformation
-        use_existing = False
         if os.path.exists("rectification_transform.xml"):
-            choice = input("\nFound existing rectification transformation. Use it? (y/N): ").strip().lower()
-            if choice in ['y', 'yes']:
-                use_existing = self.load_existing_transformation()
+            self.rectifier = RealtimeRectifier(self.frame_width, self.frame_height)
+            if self.rectifier.load_transformation_xml("rectification_transform.xml"):
+                print("Loaded existing rectification transformation")
+            else:
+                print("Failed to load existing transformation")
+                self.rectifier = None
+        else:
+            print("No existing rectification found")
+            self.rectifier = None
         
-        # Setup rectification if needed
-        if not use_existing:
-            if not self.setup_rectification():
-                print("Rectification setup failed")
-                return
-        
-        # Run real-time rectification
-        self.run_realtime_rectification()
+        # Run unified interface
+        self.run_unified_interface()
         
         # Cleanup
         self.cleanup()
