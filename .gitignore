@@ -132,13 +132,16 @@ dmypy.json
 calibration_data.npz
 calibration_data.xml
 calibration_data_summary.txt
+rectification_transform.xml
 captured_images/
+*_old.py
 *.jpg
 *.png
 *.jpeg
 *.bmp
 *.tiff
 rectified_image.*
+rectified_realtime_*.jpg
 distorted_image.*
 distortion_visualization.*
 calibration_test_*.jpg

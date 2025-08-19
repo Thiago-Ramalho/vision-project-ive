@@ -1,416 +1,240 @@
 """
-Enhanced Point Selection Interface for Image Rectification
-
-This module provides an interactive interface for selecting and adjusting
-the four corner points for perspective rectification. Features include:
-- Drag and drop point selection
-- Real-time polygon visualization
-- Undo/redo functionality
-- Visual feedback and validation
-- OK/Cancel buttons
+Real-time point selector that works with live camera feed.
+Allows users to select and adjust 4 corner points while viewing live video.
 """
 
 import cv2
 import numpy as np
-import math
+import threading
+import time
 
 
-class PointSelector:
-    def __init__(self, image, window_name="Point Selection"):
+class RealtimePointSelector:
+    def __init__(self, camera, window_name="Real-time Point Selection"):
         """
-        Initialize the point selector interface.
+        Initialize real-time point selector.
         
         Args:
-            image: The image to select points on
+            camera: Camera object that provides get_frame() method
             window_name: Name of the OpenCV window
         """
-        self.original_image = image.copy()
-        self.display_image = image.copy()
+        self.camera = camera
         self.window_name = window_name
+        self.points = []
+        self.selected_point = -1  # Index of currently selected point (-1 = none)
+        self.is_dragging = False
+        self.running = False
         
-        # Point management
-        self.points = [None, None, None, None]  # [TL, TR, BR, BL]
-        self.point_names = ["Top-Left", "Top-Right", "Bottom-Right", "Bottom-Left"]
-        self.point_colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0)]  # BGR
-        
-        # Interaction state
-        self.selected_point = None
-        self.dragging = False
-        self.mouse_pos = (0, 0)
-        
-        # UI elements
+        # Visual settings
         self.point_radius = 8
+        self.point_color = (0, 255, 0)  # Green
+        self.selected_color = (0, 255, 255)  # Yellow
+        self.line_color = (255, 0, 0)  # Blue
         self.line_thickness = 2
-        self.font = cv2.FONT_HERSHEY_SIMPLEX
-        self.font_scale = 0.6
-        self.font_thickness = 2
         
-        # Button areas (will be calculated based on image size)
-        self.button_height = 40
-        self.button_width = 80
-        self.buttons = {}
-        self.button_states = {"OK": False, "Cancel": False, "Reset": False}
+        # Button areas (will be set based on frame size)
+        self.button_ok = None
+        self.button_cancel = None
+        self.button_reset = None
+        self.button_undo = None
         
-        # History for undo/redo
-        self.history = []
-        self.history_index = -1
-        
-        # Result
-        self.result = None
+        # State
+        self.confirmed = False
         self.cancelled = False
         
-        self._setup_interface()
-    
-    def _setup_interface(self):
-        """Setup the interface elements."""
-        h, w = self.original_image.shape[:2]
+        # Threading
+        self.frame_lock = threading.Lock()
+        self.current_frame = None
         
-        # Calculate button positions
-        button_y = h + 10
-        self.buttons = {
-            "OK": (w - 200, button_y, self.button_width, self.button_height),
-            "Cancel": (w - 110, button_y, self.button_width, self.button_height),
-            "Reset": (10, button_y, self.button_width, self.button_height),
-            "Undo": (100, button_y, self.button_width, self.button_height)
-        }
-        
-        # Create extended canvas for buttons
-        self.canvas_height = h + 60
-        self.canvas = np.ones((self.canvas_height, w, 3), dtype=np.uint8) * 240
-        
-        # Copy original image to canvas
-        self.canvas[:h, :] = self.original_image
-        
-        # Save initial state
-        self._save_state()
-    
-    def _save_state(self):
-        """Save current state for undo functionality."""
-        state = [p.copy() if p is not None else None for p in self.points]
-        self.history = self.history[:self.history_index + 1]  # Remove redo history
-        self.history.append(state)
-        self.history_index = len(self.history) - 1
-    
-    def _undo(self):
-        """Undo last action."""
-        if self.history_index > 0:
-            self.history_index -= 1
-            self.points = [p.copy() if p is not None else None for p in self.history[self.history_index]]
-            self._update_display()
-    
-    def _reset_points(self):
-        """Reset all points."""
-        self.points = [None, None, None, None]
-        self._save_state()
-        self._update_display()
-    
-    def _point_distance(self, p1, p2):
-        """Calculate distance between two points."""
-        return math.sqrt((p1[0] - p2[0])**2 + (p1[1] - p2[1])**2)
-    
-    def _find_nearest_point(self, pos):
-        """Find the nearest point to the given position."""
-        min_dist = float('inf')
-        nearest_idx = None
-        
-        for i, point in enumerate(self.points):
-            if point is not None:
-                dist = self._point_distance(pos, point)
-                if dist < min_dist and dist < 20:  # Within 20 pixels
-                    min_dist = dist
-                    nearest_idx = i
-        
-        return nearest_idx
-    
-    def _find_empty_point_slot(self):
-        """Find the first empty point slot."""
-        for i, point in enumerate(self.points):
-            if point is None:
-                return i
-        return None
-    
-    def _point_in_button(self, pos, button_name):
-        """Check if position is inside a button."""
-        if button_name not in self.buttons:
-            return False
-        
-        x, y, w, h = self.buttons[button_name]
-        px, py = pos
-        return x <= px <= x + w and y <= py <= y + h
-    
-    def _draw_button(self, button_name, pressed=False):
-        """Draw a button on the canvas."""
-        if button_name not in self.buttons:
-            return
-        
-        x, y, w, h = self.buttons[button_name]
-        
-        # Button colors
-        if pressed:
-            color = (200, 200, 200)
-            text_color = (0, 0, 0)
-        else:
-            color = (220, 220, 220)
-            text_color = (50, 50, 50)
-        
-        # Draw button background
-        cv2.rectangle(self.canvas, (x, y), (x + w, y + h), color, -1)
-        cv2.rectangle(self.canvas, (x, y), (x + w, y + h), (100, 100, 100), 2)
-        
-        # Draw button text
-        text_size = cv2.getTextSize(button_name, self.font, self.font_scale, self.font_thickness)[0]
-        text_x = x + (w - text_size[0]) // 2
-        text_y = y + (h + text_size[1]) // 2
-        cv2.putText(self.canvas, button_name, (text_x, text_y), 
-                   self.font, self.font_scale, text_color, self.font_thickness)
-    
-    def _draw_polygon(self):
-        """Draw the polygon formed by the four points."""
-        valid_points = [p for p in self.points if p is not None]
-        
-        if len(valid_points) >= 3:
-            # Draw polygon outline
-            if len(valid_points) == 4:
-                # Complete quadrilateral
-                pts = np.array(self.points, dtype=np.int32)
-                cv2.polylines(self.canvas, [pts], True, (0, 255, 255), self.line_thickness)
-                
-                # Fill with semi-transparent overlay
-                overlay = self.canvas.copy()
-                cv2.fillPoly(overlay, [pts], (0, 255, 255))
-                cv2.addWeighted(self.canvas, 0.9, overlay, 0.1, 0, self.canvas)
-            else:
-                # Partial polygon
-                for i in range(len(valid_points) - 1):
-                    cv2.line(self.canvas, tuple(valid_points[i]), tuple(valid_points[i + 1]), 
-                            (128, 128, 255), self.line_thickness)
-    
-    def _draw_points(self):
-        """Draw all points on the canvas."""
-        for i, point in enumerate(self.points):
-            if point is not None:
-                color = self.point_colors[i]
-                
-                # Highlight selected point
-                if i == self.selected_point:
-                    cv2.circle(self.canvas, tuple(point), self.point_radius + 3, (255, 255, 255), -1)
-                
-                # Draw point
-                cv2.circle(self.canvas, tuple(point), self.point_radius, color, -1)
-                cv2.circle(self.canvas, tuple(point), self.point_radius, (0, 0, 0), 2)
-                
-                # Draw point label
-                label = f"{i+1}: {self.point_names[i]}"
-                label_pos = (point[0] + 15, point[1] - 10)
-                cv2.putText(self.canvas, label, label_pos, self.font, 
-                           self.font_scale, color, self.font_thickness)
-    
-    def _draw_instructions(self):
-        """Draw instruction text."""
-        h, w = self.original_image.shape[:2]
-        instructions = [
-            "Instructions:",
-            "1. Click to place points (order: TL, TR, BR, BL)",
-            "2. Drag points to adjust position",
-            "3. Right-click point to remove it",
-            "4. Click OK when satisfied"
-        ]
-        
-        y_start = h + 5
-        for i, instruction in enumerate(instructions):
-            y_pos = y_start + i * 15
-            if i == 0:
-                cv2.putText(self.canvas, instruction, (w - 400, y_pos), 
-                           self.font, 0.7, (0, 0, 0), 2)
-            else:
-                cv2.putText(self.canvas, instruction, (w - 400, y_pos), 
-                           self.font, 0.5, (50, 50, 50), 1)
-    
-    def _draw_point_count(self):
-        """Draw point count information."""
-        valid_count = sum(1 for p in self.points if p is not None)
-        status_text = f"Points: {valid_count}/4"
-        
-        if valid_count == 4:
-            status_text += " - Ready for rectification!"
-            color = (0, 150, 0)
-        else:
-            color = (0, 0, 150)
-        
-        cv2.putText(self.canvas, status_text, (10, 25), 
-                   self.font, 0.7, color, 2)
-    
-    def _update_display(self):
-        """Update the display with current state."""
-        # Reset canvas
-        h, w = self.original_image.shape[:2]
-        self.canvas = np.ones((self.canvas_height, w, 3), dtype=np.uint8) * 240
-        self.canvas[:h, :] = self.original_image
-        
-        # Draw polygon first (so it's behind points)
-        self._draw_polygon()
-        
-        # Draw points
-        self._draw_points()
-        
-        # Draw UI elements
-        self._draw_instructions()
-        self._draw_point_count()
-        
-        # Draw buttons
-        for button_name in self.buttons:
-            self._draw_button(button_name, self.button_states.get(button_name, False))
-        
-        # Show the canvas
-        cv2.imshow(self.window_name, self.canvas)
-    
-    def _mouse_callback(self, event, x, y, flags, param):
-        """Handle mouse events."""
-        self.mouse_pos = (x, y)
-        
-        # Only handle clicks on the image area
-        h, w = self.original_image.shape[:2]
-        
+    def mouse_callback(self, event, x, y, flags, param):
+        """Handle mouse events for point selection and manipulation."""
         if event == cv2.EVENT_LBUTTONDOWN:
-            # Check button clicks first
-            for button_name in self.buttons:
-                if self._point_in_button((x, y), button_name):
-                    self.button_states[button_name] = True
-                    self._update_display()
+            # Check if clicking on buttons first
+            if self.button_ok and self._point_in_rect((x, y), self.button_ok):
+                if len(self.points) == 4:
+                    self.confirmed = True
+                return
+            elif self.button_cancel and self._point_in_rect((x, y), self.button_cancel):
+                self.cancelled = True
+                return
+            elif self.button_reset and self._point_in_rect((x, y), self.button_reset):
+                self.points = []
+                self.selected_point = -1
+                return
+            elif self.button_undo and self._point_in_rect((x, y), self.button_undo):
+                if self.points:
+                    self.points.pop()
+                    self.selected_point = -1
+                return
+            
+            # Check if clicking near existing point
+            for i, point in enumerate(self.points):
+                if self._distance((x, y), point) < self.point_radius * 2:
+                    self.selected_point = i
+                    self.is_dragging = True
                     return
             
-            # Handle image area clicks
-            if y < h:
-                # Find nearest point
-                nearest_idx = self._find_nearest_point((x, y))
-                
-                if nearest_idx is not None:
-                    # Start dragging existing point
-                    self.selected_point = nearest_idx
-                    self.dragging = True
-                else:
-                    # Place new point
-                    empty_slot = self._find_empty_point_slot()
-                    if empty_slot is not None:
-                        self.points[empty_slot] = [x, y]
-                        self.selected_point = empty_slot
-                        self._save_state()
-                
-                self._update_display()
+            # Add new point if we have less than 4
+            if len(self.points) < 4:
+                self.points.append((x, y))
+                self.selected_point = len(self.points) - 1
+        
+        elif event == cv2.EVENT_MOUSEMOVE and self.is_dragging:
+            # Move the selected point
+            if 0 <= self.selected_point < len(self.points):
+                self.points[self.selected_point] = (x, y)
         
         elif event == cv2.EVENT_LBUTTONUP:
-            # Handle button releases
-            for button_name in self.buttons:
-                if self.button_states.get(button_name, False):
-                    self.button_states[button_name] = False
-                    if self._point_in_button((x, y), button_name):
-                        # Button was clicked
-                        if button_name == "OK":
-                            valid_count = sum(1 for p in self.points if p is not None)
-                            if valid_count == 4:
-                                self.result = [tuple(p) for p in self.points]
-                                return
-                        elif button_name == "Cancel":
-                            self.cancelled = True
-                            return
-                        elif button_name == "Reset":
-                            self._reset_points()
-                        elif button_name == "Undo":
-                            self._undo()
-                    
-                    self._update_display()
-                    return
+            self.is_dragging = False
+    
+    def _distance(self, p1, p2):
+        """Calculate distance between two points."""
+        return np.sqrt((p1[0] - p2[0])**2 + (p1[1] - p2[1])**2)
+    
+    def _point_in_rect(self, point, rect):
+        """Check if point is inside rectangle."""
+        x, y = point
+        rx, ry, rw, rh = rect
+        return rx <= x <= rx + rw and ry <= y <= ry + rh
+    
+    def _setup_ui_elements(self, frame_height, frame_width):
+        """Setup button positions based on frame size."""
+        button_width = 80
+        button_height = 30
+        margin = 10
+        
+        # Position buttons at the bottom
+        y_pos = frame_height - button_height - margin
+        
+        self.button_ok = (margin, y_pos, button_width, button_height)
+        self.button_cancel = (margin + button_width + 10, y_pos, button_width, button_height)
+        self.button_reset = (margin + 2 * (button_width + 10), y_pos, button_width, button_height)
+        self.button_undo = (margin + 3 * (button_width + 10), y_pos, button_width, button_height)
+    
+    def _draw_button(self, frame, rect, text, color=(100, 100, 100)):
+        """Draw a button on the frame."""
+        x, y, w, h = rect
+        cv2.rectangle(frame, (x, y), (x + w, y + h), color, -1)
+        cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 255, 255), 2)
+        
+        # Center text in button
+        text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)[0]
+        text_x = x + (w - text_size[0]) // 2
+        text_y = y + (h + text_size[1]) // 2
+        cv2.putText(frame, text, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+    
+    def _draw_overlay(self, frame):
+        """Draw the interactive overlay on the frame."""
+        overlay = frame.copy()
+        
+        # Draw points
+        for i, point in enumerate(self.points):
+            color = self.selected_color if i == self.selected_point else self.point_color
+            cv2.circle(overlay, point, self.point_radius, color, -1)
+            cv2.circle(overlay, point, self.point_radius + 2, (255, 255, 255), 2)
             
-            # Stop dragging
-            if self.dragging:
-                self.dragging = False
-                self._save_state()
+            # Label points
+            label = str(i + 1)
+            cv2.putText(overlay, label, (point[0] + 15, point[1] - 10),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
         
-        elif event == cv2.EVENT_RBUTTONDOWN:
-            # Right click to remove point
-            if y < h:
-                nearest_idx = self._find_nearest_point((x, y))
-                if nearest_idx is not None:
-                    self.points[nearest_idx] = None
-                    self.selected_point = None
-                    self._save_state()
-                    self._update_display()
+        # Draw polygon if we have at least 3 points
+        if len(self.points) >= 3:
+            pts = np.array(self.points + ([self.points[0]] if len(self.points) == 4 else []), 
+                          dtype=np.int32)
+            cv2.polylines(overlay, [pts], len(self.points) == 4, self.line_color, self.line_thickness)
         
-        elif event == cv2.EVENT_MOUSEMOVE:
-            # Handle dragging
-            if self.dragging and self.selected_point is not None and y < h:
-                self.points[self.selected_point] = [x, y]
-                self._update_display()
+        # Setup UI elements if not done
+        if self.button_ok is None:
+            self._setup_ui_elements(frame.shape[0], frame.shape[1])
+        
+        # Draw buttons
+        ok_color = (0, 150, 0) if len(self.points) == 4 else (100, 100, 100)
+        self._draw_button(overlay, self.button_ok, "OK", ok_color)
+        self._draw_button(overlay, self.button_cancel, "Cancel", (0, 0, 150))
+        self._draw_button(overlay, self.button_reset, "Reset", (150, 150, 0))
+        
+        undo_color = (150, 100, 0) if self.points else (100, 100, 100)
+        self._draw_button(overlay, self.button_undo, "Undo", undo_color)
+        
+        # Instructions
+        instructions = [
+            "Click to add points (max 4)",
+            "Drag points to move them",
+            f"Points: {len(self.points)}/4"
+        ]
+        
+        for i, instruction in enumerate(instructions):
+            y_pos = 30 + i * 25
+            cv2.putText(overlay, instruction, (10, y_pos),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        
+        return overlay
     
     def select_points(self):
         """
-        Start the point selection interface.
+        Start the real-time point selection interface.
         
         Returns:
-            tuple: (success, points) where success is bool and points is list of 4 (x,y) tuples
-                  Returns (False, None) if cancelled
+            tuple: (success, points) where success is bool and points is list of (x,y) tuples
         """
+        self.running = True
+        self.confirmed = False
+        self.cancelled = False
+        self.points = []
+        self.selected_point = -1
+        
+        # Create window and set mouse callback
         cv2.namedWindow(self.window_name, cv2.WINDOW_AUTOSIZE)
-        cv2.setMouseCallback(self.window_name, self._mouse_callback)
+        cv2.setMouseCallback(self.window_name, self.mouse_callback)
         
-        self._update_display()
-        
-        print("Point Selection Interface")
-        print("========================")
-        print("Instructions:")
-        print("- Click to place points in order: Top-Left, Top-Right, Bottom-Right, Bottom-Left")
+        print("Real-time point selection started...")
+        print("- Click to add up to 4 corner points")
         print("- Drag points to adjust their position")
-        print("- Right-click a point to remove it")
-        print("- Click OK when all 4 points are placed correctly")
-        print("- Press ESC or click Cancel to abort")
+        print("- Use OK button when done, Cancel to abort")
         
-        while True:
-            key = cv2.waitKey(1) & 0xFF
-            
-            if key == 27:  # ESC key
-                self.cancelled = True
-                break
-            elif key == ord('u'):  # U key for undo
-                self._undo()
-            elif key == ord('r'):  # R key for reset
-                self._reset_points()
-            
-            if self.result is not None:
-                break
-            
-            if self.cancelled:
-                break
+        try:
+            while self.running and not self.confirmed and not self.cancelled:
+                # Get current frame
+                frame = self.camera.get_frame()
+                if frame is None:
+                    print("Failed to get frame from camera")
+                    break
+                
+                # Draw overlay
+                display_frame = self._draw_overlay(frame)
+                
+                # Show frame
+                cv2.imshow(self.window_name, display_frame)
+                
+                # Handle keyboard input
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord('q') or key == 27:  # Esc key
+                    self.cancelled = True
+                elif key == ord(' ') and len(self.points) == 4:  # Space to confirm
+                    self.confirmed = True
+                elif key == ord('r'):  # R to reset
+                    self.points = []
+                    self.selected_point = -1
+                elif key == ord('u') and self.points:  # U to undo
+                    self.points.pop()
+                    self.selected_point = -1
         
-        cv2.destroyWindow(self.window_name)
+        except KeyboardInterrupt:
+            self.cancelled = True
         
-        if self.cancelled:
-            return False, None
-        elif self.result is not None:
-            return True, self.result
+        finally:
+            cv2.destroyWindow(self.window_name)
+            self.running = False
+        
+        if self.confirmed and len(self.points) == 4:
+            print("Points selected successfully!")
+            return True, self.points.copy()
         else:
-            return False, None
-
-
-def test_point_selector():
-    """Test the point selector with a sample image."""
-    # Create a test image
-    test_image = np.ones((480, 640, 3), dtype=np.uint8) * 255
+            print("Point selection cancelled or incomplete")
+            return False, []
     
-    # Draw a test pattern
-    cv2.rectangle(test_image, (100, 100), (540, 380), (200, 200, 200), -1)
-    cv2.rectangle(test_image, (150, 150), (490, 330), (100, 100, 100), 2)
-    cv2.putText(test_image, "Test Document", (200, 250), 
-               cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 0, 0), 3)
-    
-    # Test the selector
-    selector = PointSelector(test_image)
-    success, points = selector.select_points()
-    
-    if success:
-        print(f"Selected points: {points}")
-    else:
-        print("Selection cancelled")
-
-
-if __name__ == "__main__":
-    test_point_selector()
+    def cleanup(self):
+        """Clean up resources."""
+        self.running = False
+        cv2.destroyWindow(self.window_name)
