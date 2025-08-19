@@ -25,6 +25,7 @@ class RealtimeRectifier:
         self.map_y = None
         self.output_width = None
         self.output_height = None
+        self.field_mask = None  # Mask to hide corner areas outside the field
         self.is_initialized = False
         
     def compute_transformation(self, src_points, output_width=None, output_height=None, field_aspect_ratio=None):
@@ -106,16 +107,57 @@ class RealtimeRectifier:
         # Store maps for cv2.remap
         self.map_x = src_x.astype(np.float32)
         self.map_y = src_y.astype(np.float32)
+        
+        # Create field mask to hide corner areas
+        self._create_field_mask()
+    
+    def _create_field_mask(self):
+        """
+        Create a mask for the soccer field that excludes the corner areas.
+        Field: 170cm x 130cm
+        Corner areas to exclude: 10cm x 45cm each (red areas in corners)
+        """
+        # Create mask with same dimensions as output
+        self.field_mask = np.ones((self.output_height, self.output_width), dtype=np.uint8) * 255
+        
+        # Calculate corner area dimensions in pixels
+        # Field real dimensions: 170cm x 130cm
+        # Corner areas: 10cm x 45cm each
+        corner_width_cm = 10.0
+        corner_height_cm = 45.0
+        field_width_cm = 170.0
+        field_height_cm = 130.0
+        
+        # Convert to pixel coordinates
+        corner_width_px = int((corner_width_cm / field_width_cm) * self.output_width)
+        corner_height_px = int((corner_height_cm / field_height_cm) * self.output_height)
+        
+        print(f"Field mask: excluding corner areas of {corner_width_px}×{corner_height_px} pixels")
+        
+        # Black out the four corner areas
+        # Top-left corner
+        self.field_mask[0:corner_height_px, 0:corner_width_px] = 0
+        
+        # Top-right corner  
+        self.field_mask[0:corner_height_px, self.output_width-corner_width_px:self.output_width] = 0
+        
+        # Bottom-left corner
+        self.field_mask[self.output_height-corner_height_px:self.output_height, 0:corner_width_px] = 0
+        
+        # Bottom-right corner
+        self.field_mask[self.output_height-corner_height_px:self.output_height, 
+                       self.output_width-corner_width_px:self.output_width] = 0
     
     def rectify_frame(self, frame):
         """
-        Apply real-time rectification to a frame with proper centering and black borders.
+        Apply real-time rectification to a frame with proper centering, black borders, and field masking.
         
         Args:
             frame: Input frame (numpy array)
             
         Returns:
-            numpy array: Rectified frame with same dimensions as input, centered with black borders
+            numpy array: Rectified frame with same dimensions as input, centered with black borders,
+                        and corner areas outside the soccer field masked out
         """
         if not self.is_initialized:
             raise RuntimeError("Rectifier not initialized. Call compute_transformation first.")
@@ -123,6 +165,15 @@ class RealtimeRectifier:
         # Use pre-computed maps for maximum performance
         rectified = cv2.remap(frame, self.map_x, self.map_y, 
                              cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
+        
+        # Apply field mask to hide corner areas
+        if self.field_mask is not None:
+            # Convert mask to 3-channel for color images
+            if len(rectified.shape) == 3:
+                mask_3ch = cv2.cvtColor(self.field_mask, cv2.COLOR_GRAY2BGR)
+                rectified = cv2.bitwise_and(rectified, mask_3ch)
+            else:
+                rectified = cv2.bitwise_and(rectified, self.field_mask)
         
         # If rectified image is smaller than input frame, center it with black borders
         if self.output_width != self.frame_width or self.output_height != self.frame_height:
@@ -163,6 +214,8 @@ class RealtimeRectifier:
         ET.SubElement(metadata, "output_height").text = str(self.output_height)
         ET.SubElement(metadata, "field_aspect_ratio").text = f"{170.0/130.0:.6f}"
         ET.SubElement(metadata, "field_description").text = "Mini soccer field: 170cm x 130cm"
+        ET.SubElement(metadata, "corner_masking").text = "true"
+        ET.SubElement(metadata, "corner_areas").text = "10cm x 45cm each (excluded from output)"
         
         # Add homography matrix
         homography_elem = ET.SubElement(root, "HomographyMatrix")

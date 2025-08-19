@@ -166,7 +166,7 @@ class RectificationApp:
         # Field info when in rectified mode
         if show_rectified and has_rectification:
             field_info_y = status_y - 25
-            field_info = f"Real-world proportions maintained | Aspect ratio: {170.0/130.0:.3f}"
+            field_info = f"Real-world proportions | Corner areas masked | Aspect ratio: {170.0/130.0:.3f}"
             cv2.putText(frame, field_info, (margin, field_info_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
         
         # Instructions
