@@ -6,8 +6,13 @@ This module provides the main entry point for the application.
 import cv2
 import numpy as np
 import os
+
+# Fix Qt platform plugin issue on Linux
+os.environ['QT_QPA_PLATFORM'] = 'xcb'
+
 from camera_capture import CameraCapture, select_camera_interactive, preview_camera
 from image_processor import ImageProcessor
+from point_selector import PointSelector
 from utils import load_calibration_data, save_image
 
 
@@ -24,7 +29,6 @@ class RectificationApp:
         
         self.camera = CameraCapture(camera_index)
         self.processor = ImageProcessor()
-        self.points = []
         self.captured_image = None
         self.calibration_data = None
         
@@ -42,42 +46,43 @@ class RectificationApp:
             if self.calibration_data is None:
                 print("No calibration data found. Please run calibration.py first.")
                 return False
+            
+            # Extract camera matrix and distortion coefficients
+            self.camera_matrix = self.calibration_data['camera_matrix']
+            self.distortion_coeffs = self.calibration_data['dist_coeffs']
+            
             return True
         except Exception as e:
             print(f"Error loading calibration data: {e}")
             return False
     
-    def mouse_callback(self, event, x, y, flags, param):
-        """Handle mouse clicks for point selection."""
-        if event == cv2.EVENT_LBUTTONDOWN and self.captured_image is not None:
-            if len(self.points) < 4:
-                self.points.append((x, y))
-                print(f"Point {len(self.points)}: ({x}, {y})")
-                
-                # Draw the point on the image
-                cv2.circle(self.captured_image, (x, y), 5, (0, 255, 0), -1)
-                cv2.putText(self.captured_image, str(len(self.points)), 
-                           (x + 10, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 
-                           0.7, (0, 255, 0), 2)
-                
-                if len(self.points) == 4:
-                    print("All 4 points selected. Processing rectification...")
-                    self.process_rectification()
+    def select_points_interactive(self, image):
+        """Use the interactive point selector interface."""
+        print("Opening interactive point selection interface...")
+        
+        selector = PointSelector(image, "Select 4 Corner Points")
+        success, points = selector.select_points()
+        
+        if success and points:
+            print("Points selected successfully:")
+            for i, point in enumerate(points):
+                print(f"  Point {i+1}: {point}")
+            return list(points)
+        else:
+            print("Point selection cancelled or failed")
+            return None
     
-    def process_rectification(self):
+    def process_rectification(self, image, points):
         """Process the rectification based on selected points."""
-        if len(self.points) != 4:
+        if len(points) != 4:
             print("Need exactly 4 points for rectification")
             return
         
         # Convert points to numpy array
-        src_points = np.array(self.points, dtype=np.float32)
-        
-        # Create the original image copy for rectification
-        original_image = self.captured_image.copy()
+        src_points = np.array(points, dtype=np.float32)
         
         # Process rectification
-        rectified = self.processor.rectify_image(original_image, src_points)
+        rectified = self.processor.rectify_image(image, src_points)
         
         if rectified is not None:
             # Display rectified image
@@ -88,69 +93,74 @@ class RectificationApp:
             print("Rectified image saved as 'rectified_image.jpg'")
             
             # Reset for next capture
-            self.points = []
             self.captured_image = None
     
     def run(self):
-        """Run the main application loop."""
+        """Main application loop."""
+        # Load calibration data
         if not self.load_calibration():
-            print("Cannot start application without calibration data.")
+            print("Cannot proceed without calibration data")
             return
+
+        print("Camera started. Press 'c' to capture image for rectification, 'q' to quit")
         
-        print("Camera Rectification Application")
-        print("Controls:")
-        print("  'c' - Capture image for rectification")
-        print("  'q' - Quit")
-        print("  Click 4 points on captured image to rectify")
-        print("  Points order: top-left, top-right, bottom-right, bottom-left")
-        
-        # Set up window and mouse callback
-        cv2.namedWindow('Camera Feed')
-        cv2.setMouseCallback('Camera Feed', self.mouse_callback)
-        
-        try:
-            while True:
-                # Get frame from camera
-                frame = self.camera.get_frame()
-                if frame is None:
-                    print("Failed to get frame from camera")
-                    break
+        while True:
+            frame = self.camera.get_frame()
+            if frame is None:
+                print("Failed to read from camera")
+                break
+            
+            # Apply distortion correction
+            corrected_frame = cv2.undistort(frame, self.camera_matrix, 
+                                          self.distortion_coeffs)
+            
+            cv2.imshow('Camera (Distortion Corrected)', corrected_frame)
+            
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('c'):
+                # Capture image and start point selection
+                self.captured_image = corrected_frame.copy()
                 
-                # Apply distortion correction if calibration data is available
-                if self.calibration_data is not None:
-                    camera_matrix = self.calibration_data['camera_matrix']
-                    dist_coeffs = self.calibration_data['dist_coeffs']
-                    frame = cv2.undistort(frame, camera_matrix, dist_coeffs)
+                # Use interactive point selector
+                points = self.select_points_interactive(self.captured_image)
                 
-                # Display the frame
-                display_frame = frame.copy()
-                if self.captured_image is None:
-                    cv2.putText(display_frame, "Press 'c' to capture", 
-                               (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 
-                               1, (0, 255, 0), 2)
+                if points:
+                    # Process rectification
+                    self.process_rectification(self.captured_image, points)
                 
-                cv2.imshow('Camera Feed', display_frame)
-                
-                # Handle key presses
-                key = cv2.waitKey(1) & 0xFF
-                if key == ord('q'):
-                    break
-                elif key == ord('c'):
-                    # Capture image for rectification
-                    self.captured_image = frame.copy()
-                    self.points = []
-                    cv2.imshow('Camera Feed', self.captured_image)
-                    print("Image captured. Click 4 corner points in order:")
-                    print("1. Top-left, 2. Top-right, 3. Bottom-right, 4. Bottom-left")
+            elif key == ord('q'):
+                break
         
-        except KeyboardInterrupt:
-            print("\nApplication interrupted by user")
-        
-        finally:
+        # Cleanup
+        self.cleanup()
+    
+    def cleanup(self):
+        """Clean up resources."""
+        if self.camera:
             self.camera.release()
-            cv2.destroyAllWindows()
+        cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":
-    app = RectificationApp()
-    app.run()
+    try:
+        # Try to test OpenCV GUI functionality
+        test_window = "OpenCV Test"
+        cv2.namedWindow(test_window, cv2.WINDOW_AUTOSIZE)
+        cv2.destroyWindow(test_window)
+        
+        print("OpenCV GUI test passed. Starting application...")
+        app = RectificationApp()
+        app.run()
+        
+    except Exception as e:
+        print(f"Error starting application: {e}")
+        print("\nTroubleshooting:")
+        print("1. Try running: export QT_QPA_PLATFORM=xcb")
+        print("2. Or try: export QT_QPA_PLATFORM=x11") 
+        print("3. Or use the provided run_main.sh script")
+        print("4. Make sure you have a display available (not running headless)")
+        
+        # Try alternative: run without GUI for testing
+        print("\nAlternatively, you can run individual modules:")
+        print("- python src/calibration.py (for camera calibration)")
+        print("- python src/detect_cameras.py (to list cameras)")
