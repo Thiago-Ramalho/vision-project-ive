@@ -76,14 +76,129 @@ class RealtimeRectifier:
             [0, self.output_height - 1]               # Bottom-left
         ], dtype=np.float32)
         
-        # Compute homography matrix
-        self.homography_matrix = cv2.getPerspectiveTransform(src_pts, dst_pts)
+        # Compute homography matrix manually (for educational purposes)
+        self.homography_matrix = self._compute_homography_manual(src_pts, dst_pts)
         
         # Pre-compute transformation maps for maximum performance
         self._compute_maps()
         
         self.is_initialized = True
         print(f"Transformation computed for output size: {self.output_width}x{self.output_height}")
+    
+    def _compute_homography_manual(self, src_pts, dst_pts):
+        """
+        Manually compute homography matrix from source and destination points.
+        
+        The homography matrix H transforms points from source to destination:
+        [x'] = [h00 h01 h02] [x]
+        [y'] = [h10 h11 h12] [y]
+        [w']   [h20 h21 h22] [1]
+        
+        Where (x', y') = (x'/w', y'/w') are the destination coordinates.
+        
+        For each point correspondence (xi, yi) -> (xi', yi'), we get two equations:
+        xi' = (h00*xi + h01*yi + h02) / (h20*xi + h21*yi + h22)
+        yi' = (h10*xi + h11*yi + h12) / (h20*xi + h21*yi + h22)
+        
+        Rearranging to linear form:
+        h00*xi + h01*yi + h02 - h20*xi*xi' - h21*yi*xi' - h22*xi' = 0
+        h10*xi + h11*yi + h12 - h20*xi*yi' - h21*yi*yi' - h22*yi' = 0
+        
+        Args:
+            src_pts: Source points (4x2 numpy array)
+            dst_pts: Destination points (4x2 numpy array)
+            
+        Returns:
+            numpy array: 3x3 homography matrix
+        """
+        print("Computing homography matrix manually...")
+        
+        # We need 8 equations for 8 unknowns (h22 = 1 by convention)
+        # Each point pair gives us 2 equations, so 4 points give us 8 equations
+        A = []
+        
+        for i in range(4):
+            x, y = src_pts[i]
+            xp, yp = dst_pts[i]
+            
+            # First equation: h00*x + h01*y + h02 - h20*x*xp - h21*y*xp - h22*xp = 0
+            # Rearranged: [x, y, 1, 0, 0, 0, -x*xp, -y*xp] * [h00, h01, h02, h10, h11, h12, h20, h21]^T = xp
+            A.append([x, y, 1, 0, 0, 0, -x*xp, -y*xp])
+            
+            # Second equation: h10*x + h11*y + h12 - h20*x*yp - h21*y*yp - h22*yp = 0
+            # Rearranged: [0, 0, 0, x, y, 1, -x*yp, -y*yp] * [h00, h01, h02, h10, h11, h12, h20, h21]^T = yp
+            A.append([0, 0, 0, x, y, 1, -x*yp, -y*yp])
+        
+        A = np.array(A, dtype=np.float64)
+        
+        # Right-hand side vector (destination coordinates)
+        b = []
+        for i in range(4):
+            xp, yp = dst_pts[i]
+            b.extend([xp, yp])
+        b = np.array(b, dtype=np.float64)
+        
+        print(f"System matrix A shape: {A.shape}")
+        print(f"Right-hand side b shape: {b.shape}")
+        
+        # Solve the linear system A * h = b
+        # where h = [h00, h01, h02, h10, h11, h12, h20, h21]^T
+        try:
+            h_vector = np.linalg.solve(A, b)
+            print("Linear system solved successfully")
+        except np.linalg.LinAlgError:
+            print("Matrix is singular, using least squares solution")
+            h_vector, residuals, rank, s = np.linalg.lstsq(A, b, rcond=None)
+            print(f"Least squares residuals: {residuals}")
+        
+        # Reconstruct the 3x3 homography matrix
+        # h22 = 1 by convention (homogeneous coordinates)
+        H = np.array([
+            [h_vector[0], h_vector[1], h_vector[2]],  # [h00, h01, h02]
+            [h_vector[3], h_vector[4], h_vector[5]],  # [h10, h11, h12]
+            [h_vector[6], h_vector[7], 1.0]           # [h20, h21, h22]
+        ], dtype=np.float64)
+        
+        print("Homography matrix computed:")
+        print(H)
+        
+        # Verify the transformation with a test point
+        test_src = src_pts[0]
+        test_dst_expected = dst_pts[0]
+        test_dst_computed = self._transform_point(test_src, H)
+        error = np.linalg.norm(test_dst_expected - test_dst_computed)
+        print(f"Verification: point {test_src} -> expected {test_dst_expected}, computed {test_dst_computed}")
+        print(f"Transformation error: {error:.6f} pixels")
+        
+        return H.astype(np.float32)
+    
+    def _transform_point(self, point, homography):
+        """
+        Transform a single point using homography matrix.
+        
+        Args:
+            point: (x, y) coordinates
+            homography: 3x3 homography matrix
+            
+        Returns:
+            numpy array: Transformed (x, y) coordinates
+        """
+        # Convert to homogeneous coordinates
+        point_homog = np.array([point[0], point[1], 1.0])
+        
+        # Apply transformation
+        transformed_homog = homography @ point_homog
+        
+        # Convert back to Cartesian coordinates
+        if abs(transformed_homog[2]) < 1e-10:
+            raise ValueError("Division by zero in homogeneous coordinate transformation")
+        
+        transformed_point = np.array([
+            transformed_homog[0] / transformed_homog[2],
+            transformed_homog[1] / transformed_homog[2]
+        ])
+        
+        return transformed_point
     
     def _compute_maps(self):
         """Pre-compute pixel mapping for real-time rectification."""
