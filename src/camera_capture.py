@@ -148,6 +148,136 @@ class CameraCapture:
         self.release()
 
 
+def list_available_cameras(max_cameras=10):
+    """
+    List all available cameras connected to the system.
+    
+    Args:
+        max_cameras: Maximum number of camera indices to check
+        
+    Returns:
+        list: List of available camera indices
+    """
+    available_cameras = []
+    
+    print("Scanning for available cameras...")
+    
+    for i in range(max_cameras):
+        cap = cv2.VideoCapture(i)
+        if cap.isOpened():
+            # Try to read a frame to confirm the camera works
+            ret, frame = cap.read()
+            if ret and frame is not None:
+                # Get camera properties
+                width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+                height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+                fps = cap.get(cv2.CAP_PROP_FPS)
+                
+                available_cameras.append({
+                    'index': i,
+                    'width': int(width),
+                    'height': int(height),
+                    'fps': fps
+                })
+                
+                print(f"Camera {i}: {int(width)}x{int(height)} @ {fps:.1f} FPS")
+            
+            cap.release()
+    
+    if not available_cameras:
+        print("No cameras found!")
+    else:
+        print(f"Found {len(available_cameras)} camera(s)")
+    
+    return available_cameras
+
+
+def select_camera_interactive():
+    """
+    Interactive camera selection.
+    
+    Returns:
+        int: Selected camera index, or 0 if no selection made
+    """
+    cameras = list_available_cameras()
+    
+    if not cameras:
+        print("No cameras available. Using default camera index 0.")
+        return 0
+    
+    if len(cameras) == 1:
+        print(f"Only one camera found. Using camera {cameras[0]['index']}")
+        return cameras[0]['index']
+    
+    print("\nAvailable cameras:")
+    for i, cam in enumerate(cameras):
+        print(f"  {i}: Camera {cam['index']} - {cam['width']}x{cam['height']} @ {cam['fps']:.1f} FPS")
+    
+    while True:
+        try:
+            choice = input(f"\nSelect camera (0-{len(cameras)-1}) or press Enter for camera 0: ").strip()
+            
+            if choice == "":
+                return cameras[0]['index']
+            
+            choice_idx = int(choice)
+            if 0 <= choice_idx < len(cameras):
+                selected_camera = cameras[choice_idx]['index']
+                print(f"Selected camera {selected_camera}")
+                return selected_camera
+            else:
+                print(f"Invalid choice. Please enter a number between 0 and {len(cameras)-1}")
+                
+        except ValueError:
+            print("Invalid input. Please enter a number.")
+        except KeyboardInterrupt:
+            print("\nUsing default camera 0")
+            return 0
+
+
+def preview_camera(camera_index):
+    """
+    Preview a specific camera to verify it's working.
+    
+    Args:
+        camera_index: Index of the camera to preview
+    """
+    print(f"Previewing camera {camera_index}...")
+    print("Press 'q' to close preview")
+    
+    cap = cv2.VideoCapture(camera_index)
+    
+    if not cap.isOpened():
+        print(f"Failed to open camera {camera_index}")
+        return
+    
+    try:
+        while True:
+            ret, frame = cap.read()
+            
+            if not ret:
+                print("Failed to read frame")
+                break
+            
+            # Add camera info overlay
+            cv2.putText(frame, f"Camera {camera_index}", (10, 30), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            cv2.putText(frame, "Press 'q' to close", (10, 70), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            
+            cv2.imshow(f'Camera {camera_index} Preview', frame)
+            
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+                
+    except KeyboardInterrupt:
+        print("Preview interrupted")
+    
+    finally:
+        cap.release()
+        cv2.destroyWindow(f'Camera {camera_index} Preview')
+
+
 def test_camera():
     """Test function to verify camera functionality."""
     print("Testing camera capture...")

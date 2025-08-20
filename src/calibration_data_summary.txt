@@ -1,0 +1,18 @@
+Camera Calibration Summary
+==============================
+
+Generated: 2025-08-18 23:07:39
+
+Camera Matrix:
+[[824.0021575    0.         649.2333149 ]
+ [  0.         824.28841425 387.91450983]
+ [  0.           0.           1.        ]]
+
+Distortion Coefficients:
+[[-0.03630641  0.01994795 -0.00144321 -0.00077028 -0.00258462]]
+
+Mean Reprojection Error: 0.067569
+
+Calibration Image Size: (1280, 720)
+
+Number of calibration images: 10
