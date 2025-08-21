@@ -76,8 +76,8 @@ class RealtimeRectifier:
             [0, self.output_height - 1]               # Bottom-left
         ], dtype=np.float32)
         
-        # Compute homography matrix manually (for educational purposes)
-        self.homography_matrix = self._compute_homography_manual(src_pts, dst_pts)
+        # Compute homography matrix
+        self.homography_matrix = self._compute_homography(src_pts, dst_pts)
         
         # Pre-compute transformation maps for maximum performance
         self._compute_maps()
@@ -85,7 +85,7 @@ class RealtimeRectifier:
         self.is_initialized = True
         print(f"Transformation computed for output size: {self.output_width}x{self.output_height}")
     
-    def _compute_homography_manual(self, src_pts, dst_pts):
+    def _compute_homography(self, src_pts, dst_pts):
         """
         Manually compute homography matrix from source and destination points.
         
@@ -111,7 +111,7 @@ class RealtimeRectifier:
         Returns:
             numpy array: 3x3 homography matrix
         """
-        print("Computing homography matrix manually...")
+        print("Computing homography matrix...")
         
         # We need 8 equations for 8 unknowns (h22 = 1 by convention)
         # Each point pair gives us 2 equations, so 4 points give us 8 equations
@@ -138,8 +138,8 @@ class RealtimeRectifier:
             b.extend([xp, yp])
         b = np.array(b, dtype=np.float64)
         
-        print(f"System matrix A shape: {A.shape}")
-        print(f"Right-hand side b shape: {b.shape}")
+        # print(f"System matrix A shape: {A.shape}")
+        # print(f"Right-hand side b shape: {b.shape}")
         
         # Solve the linear system A * h = b
         # where h = [h00, h01, h02, h10, h11, h12, h20, h21]^T
